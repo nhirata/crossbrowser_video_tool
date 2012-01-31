@@ -52,6 +52,8 @@ browsermap = {'opera': 'com.opera.browser/com.opera.Opera',
               'fennec-native': 'org.mozilla.fennec/.App',
               'fennec-xul': 'org.mozilla.fennec/.App'}
 
+device = ""
+
 # This class just handles ensuring all our options are sane
 class StartupOptions(optparse.OptionParser):
     def __init__(self, configfile=None, **kwargs):
@@ -110,6 +112,10 @@ class StartupOptions(optparse.OptionParser):
         self.add_option("--read_length", action="store", dest="read_length", type="string",
                         help="Time to let numbers sit on screen for video, defaults to 10s")
         defaults["read_length"] = 10
+        
+        self.add_option("--device", action="store", dest="serial", type="string",
+                        help="serial of the device to connect to through adb")
+        defaults["serial"] = None
 
         self.set_defaults(**defaults)
 
@@ -179,6 +185,8 @@ class StartupTest:
         self.url = options.url
         self.readlen = options.read_length
         self.installedFennec = None
+        self.device = options.serial
+        device = options.serial
 
         # TODO: Probably should be a python logger
         # This is a method that is called: log(msg, isError=False)
@@ -194,25 +202,25 @@ class StartupTest:
         self.log("Preparing Phone")
         try:
             # Create our testroot
-            self.log(self._run_adb("shell", ["mkdir", self.testroot]))
+            self.log(self._run_adb(device, "shell", ["mkdir", self.testroot]))
 
             # Copy our time script into place
-            self.log(self._run_adb("push", [self.timecmd, "/data/local/"]))
+            self.log(self._run_adb(device,"push", [self.timecmd, "/data/local/"]))
 
             # Chmod our time script - it's overkill but never trust android
-            self.log(self._run_adb("shell", ["chmod", "777",
+            self.log(self._run_adb(device,"shell", ["chmod", "777",
                                              "/data/local/%s" % os.path.basename(self.timecmd)]))
 
             # Copy our runscript into place
-            self.log(self._run_adb("push", [self.script, self.testroot]))
+            self.log(self._run_adb(device, "push", [self.script, self.testroot]))
 
             # If we have an apk to install we should do that
             # NOTE: We are expressly only set up to install org.mozilla.fennec, not 
             # user built fennecs. (i.e. org.mozilla.fennec_<username>)
             if self.apk:
                 # Uninstall previous version
-                self.log(self._run_adb("uninstall", ["org.mozilla.fennec"]))
-                self.log(self._run_adb("install", [self.apk]))
+                self.log(self._run_adb(device,"uninstall", ["org.mozilla.fennec"]))
+                self.log(self._run_adb(device,"install", [self.apk]))
                 self.installedFennec = "org.mozilla.fennec"
 
         except Exception as e:
@@ -228,6 +236,10 @@ class StartupTest:
         # Note that our appname is everything left of the starting intent
         appname = browsermap[self.browser].split("/")[0]
         dm = devicemanagerADB.DeviceManagerADB(packageName=appname)
+		
+		#profile directory for fennec
+        profiledir = "/data/data/org.mozilla.fennec/files/mozilla"
+        profilename = ""
 
         self.log("Running %s for %s iterations" % (self.browser, self.iterations))
         for i in range(self.iterations):
@@ -236,12 +248,12 @@ class StartupTest:
                           self.url]
             # First, we flash our "setup" screen as a marker for the video
             # and we hold it for flashlen seconds
-            self.log(self._run_adb("shell", ["am", "start", "-a",
+            self.log(self._run_adb(device,"shell", ["am", "start", "-a",
                     "android.intent.action.MAIN", "-n", "com.android.settings/.Settings"]))
             sleep(float(self.flashlen))
 
             # Run the browser
-            self.log(self._run_adb("shell", browsercmd))
+            self.log(self._run_adb(device,"shell", browsercmd))
 
             # Reading Delay - let the numbers be displayed long enough on video
             # to be read.
@@ -249,26 +261,32 @@ class StartupTest:
 
             # Kill the browser - we use the devicemanagerADB for this because it's
             # easier than re-writing all that code
+
+            # self.log(dm.getProcessList())
             if not dm.killProcess(appname):
                 self.log("ERROR: Could not kill process ending program now")
                 sys.exit(1)
-
+            self.log("Killed:"+appname)
+			
             # We will now return to the settings screen (remember our flash
             # from earlier?)  So go back to the home screen - the key code
             # for the home button is 3
-            self.log(self._run_adb("shell", ["input", "keyevent", "3"]))
+            self.log(self._run_adb(device,"shell", ["input", "keyevent", "3"]))
 
             # Pause for pause length now, to let GC's finish
             # TODO: can we cause a system GC ourselves?
             sleep(float(self.pauselen))
-        
+        		
         # If we installed a fennec, uninstall it
         if self.installedFennec:
-            self.log(self._run_adb("uninstall", [self.installedFennec]))
+            self.log(self._run_adb(device,"uninstall", [self.installedFennec]))
 
     # cmd must be an array!
-    def _run_adb(self, adbcmd, cmd, inshell=False):
-        print "run adb cmd: %s" % subprocess.list2cmdline([self.adb, adbcmd] + cmd)
+    def _run_adb(self, device, adbcmd, cmd, inshell=False):
+    	if self.device:
+            print "run adb -s <device> cmd: %s" % subprocess.list2cmdline([self.adb,"-s", self.device, adbcmd] + cmd)
+        else:
+            print "run adb cmd: %s" % subprocess.list2cmdline([self.adb, adbcmd] + cmd)
         if (inshell):
             p = subprocess.Popen([self.adb, adbcmd] + cmd,
                                  stdout=subprocess.PIPE,
